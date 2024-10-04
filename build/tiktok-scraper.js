@@ -243,7 +243,14 @@ class TikTokScraper {
     const url = `https://www.tiktok.com/api/user/detail/?uniqueId=${username}`;
     try {
       const response = await this.makeRequest(url);
-      const data = JSON.parse(response.data);
+      let data;
+      try {
+        data = JSON.parse(response.data);
+      } catch (e) {
+        this.logger.error('Error parsing JSON from user detail API:', e);
+        this.logger.log('Raw response:', response.data);
+        return [];
+      }
       
       if (data.userInfo) {
         this.userInfo = {
@@ -258,7 +265,14 @@ class TikTokScraper {
       // Fetch user's videos
       const videosUrl = `https://www.tiktok.com/api/post/item_list/?aid=1988&secUid=${data.userInfo.user.secUid}&count=${maxItems}`;
       const videosResponse = await this.makeRequest(videosUrl);
-      const videosData = JSON.parse(videosResponse.data);
+      let videosData;
+      try {
+        videosData = JSON.parse(videosResponse.data);
+      } catch (e) {
+        this.logger.error('Error parsing JSON from video list API:', e);
+        this.logger.log('Raw response:', videosResponse.data);
+        return [];
+      }
       
       if (videosData.itemList) {
         return videosData.itemList;
