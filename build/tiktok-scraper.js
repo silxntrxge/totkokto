@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRandomUserAgent } from './constant.js';
-import * as cheerio from 'cheerio';
+import cheerio from 'cheerio'; // Make sure this import is correct
 
 class TikTokScraper {
   constructor(options = {}) {
@@ -115,7 +115,7 @@ class TikTokScraper {
   async parseResponse(html) {
     this.logger.log(`Starting parseResponse method. HTML length: ${html.length}`);
 
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(html); // Move this inside the method
     const collector = [];
 
     this.logger.log(`Applying cheerio to find video items`);
@@ -205,6 +205,30 @@ class TikTokScraper {
       });
     }
 
+    // Add this section to extract data from UNIVERSAL_DATA_FOR_REHYDRATION
+    const universalDataScript = $('script#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
+    if (universalDataScript) {
+      try {
+        const universalData = JSON.parse(universalDataScript);
+        const userData = universalData.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo;
+        if (userData) {
+          collector.push({
+            id: userData.user.id,
+            uniqueId: userData.user.uniqueId,
+            nickname: userData.user.nickname,
+            signature: userData.user.signature,
+            avatarLarger: userData.user.avatarLarger,
+            followerCount: userData.stats.followerCount,
+            followingCount: userData.stats.followingCount,
+            heartCount: userData.stats.heartCount,
+            videoCount: userData.stats.videoCount
+          });
+        }
+      } catch (error) {
+        this.logger.error('Error parsing UNIVERSAL_DATA_FOR_REHYDRATION:', error);
+      }
+    }
+
     this.logger.log(`Parsing complete. Collected items: ${collector.length}`);
 
     return collector;
@@ -262,36 +286,6 @@ class TikTokScraper {
       this.logger.error('Error scraping search results:', error);
       throw error;
     }
-  }
-
-  async parseResponse(html) {
-    // ... (existing parseResponse method)
-
-    // Add this section to extract data from UNIVERSAL_DATA_FOR_REHYDRATION
-    const universalDataScript = $('script#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
-    if (universalDataScript) {
-      try {
-        const universalData = JSON.parse(universalDataScript);
-        const userData = universalData.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo;
-        if (userData) {
-          collector.push({
-            id: userData.user.id,
-            uniqueId: userData.user.uniqueId,
-            nickname: userData.user.nickname,
-            signature: userData.user.signature,
-            avatarLarger: userData.user.avatarLarger,
-            followerCount: userData.stats.followerCount,
-            followingCount: userData.stats.followingCount,
-            heartCount: userData.stats.heartCount,
-            videoCount: userData.stats.videoCount
-          });
-        }
-      } catch (error) {
-        this.logger.error('Error parsing UNIVERSAL_DATA_FOR_REHYDRATION:', error);
-      }
-    }
-
-    // ... (rest of the parseResponse method)
   }
 }
 
