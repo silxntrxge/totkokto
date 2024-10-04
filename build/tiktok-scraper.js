@@ -121,60 +121,65 @@ class TikTokScraper {
     this.logger.log(`Applying cheerio to find video items`);
 
     // Look for a script tag containing the string "SIGI_STATE"
-    const scriptContent = $('script:contains("SIGI_STATE")').html();
+    const scriptContent = $('script#SIGI_STATE').html();
     
     if (scriptContent) {
       try {
-        // Extract the JSON data from the script content
-        const jsonStr = scriptContent.match(/SIGI_STATE[^{]+({.+});/)[1];
-        const data = JSON.parse(jsonStr);
+        // Parse the JSON content of the script tag
+        const data = JSON.parse(scriptContent);
 
         // Extract video items from the parsed data
-        const items = data.ItemModule;
+        const itemModule = data.ItemModule;
         
-        for (const id in items) {
-          const item = items[id];
-          collector.push({
-            id: item.id,
-            desc: item.desc,
-            createTime: item.createTime,
-            video: {
-              id: item.video.id,
-              height: item.video.height,
-              width: item.video.width,
-              duration: item.video.duration,
-              ratio: item.video.ratio,
-              cover: item.video.cover,
-              originCover: item.video.originCover,
-              dynamicCover: item.video.dynamicCover,
-              playAddr: item.video.playAddr,
-              downloadAddr: item.video.downloadAddr,
-            },
-            author: {
-              id: item.author.id,
-              uniqueId: item.author.uniqueId,
-              nickname: item.author.nickname,
-              avatarThumb: item.author.avatarThumb,
-            },
-            music: {
-              id: item.music.id,
-              title: item.music.title,
-              playUrl: item.music.playUrl,
-              coverThumb: item.music.coverThumb,
-              authorName: item.music.authorName,
-              original: item.music.original,
-            },
-            stats: {
-              diggCount: item.stats.diggCount,
-              shareCount: item.stats.shareCount,
-              commentCount: item.stats.commentCount,
-              playCount: item.stats.playCount,
-            },
-          });
+        if (itemModule) {
+          for (const id in itemModule) {
+            const item = itemModule[id];
+            collector.push({
+              id: item.id,
+              desc: item.desc,
+              createTime: item.createTime,
+              video: {
+                id: item.video.id,
+                height: item.video.height,
+                width: item.video.width,
+                duration: item.video.duration,
+                ratio: item.video.ratio,
+                cover: item.video.cover,
+                originCover: item.video.originCover,
+                dynamicCover: item.video.dynamicCover,
+                playAddr: item.video.playAddr,
+                downloadAddr: item.video.downloadAddr,
+              },
+              author: {
+                id: item.author.id,
+                uniqueId: item.author.uniqueId,
+                nickname: item.author.nickname,
+                avatarThumb: item.author.avatarThumb,
+              },
+              music: {
+                id: item.music.id,
+                title: item.music.title,
+                playUrl: item.music.playUrl,
+                coverThumb: item.music.coverThumb,
+                authorName: item.music.authorName,
+                original: item.music.original,
+              },
+              stats: {
+                diggCount: item.stats.diggCount,
+                shareCount: item.stats.shareCount,
+                commentCount: item.stats.commentCount,
+                playCount: item.stats.playCount,
+              },
+            });
+          }
+        } else {
+          this.logger.log('No ItemModule found in SIGI_STATE data');
         }
       } catch (error) {
         this.logger.error('Error parsing SIGI_STATE data:', error);
       }
+    } else {
+      this.logger.log('SIGI_STATE script tag not found');
     }
 
     if (collector.length === 0) {
@@ -203,6 +208,90 @@ class TikTokScraper {
     this.logger.log(`Parsing complete. Collected items: ${collector.length}`);
 
     return collector;
+  }
+
+  async scrapeComments(postId, maxComments = 20) {
+    this.logger.log(`Scraping comments for post ID: ${postId}`);
+    try {
+      const url = `https://www.tiktok.com/api/comment/list/?aweme_id=${postId}&count=${maxComments}&cursor=0`;
+      const response = await this.makeRequest(url);
+      const data = JSON.parse(response.data);
+      const comments = data.comments.map(comment => ({
+        text: comment.text,
+        createTime: comment.create_time,
+        diggCount: comment.digg_count,
+        replyCount: comment.reply_comment_total,
+        author: {
+          id: comment.user.uid,
+          nickname: comment.user.nickname,
+          avatarThumb: comment.user.avatar_thumb.url_list[0]
+        }
+      }));
+      this.logger.log(`Scraped ${comments.length} comments`);
+      return comments;
+    } catch (error) {
+      this.logger.error('Error scraping comments:', error);
+      throw error;
+    }
+  }
+
+  async scrapeSearch(keyword, maxResults = 20) {
+    this.logger.log(`Scraping search results for keyword: ${keyword}`);
+    try {
+      const url = `https://www.tiktok.com/api/search/general/full/?aid=1988&keyword=${encodeURIComponent(keyword)}&offset=0&count=${maxResults}`;
+      const response = await this.makeRequest(url);
+      const data = JSON.parse(response.data);
+      const results = data.data.map(item => ({
+        id: item.item.id,
+        desc: item.item.desc,
+        createTime: item.item.createTime,
+        video: {
+          id: item.item.video.id,
+          cover: item.item.video.cover,
+          playAddr: item.item.video.playAddr
+        },
+        author: {
+          id: item.item.author.id,
+          uniqueId: item.item.author.uniqueId,
+          nickname: item.item.author.nickname
+        }
+      }));
+      this.logger.log(`Scraped ${results.length} search results`);
+      return results;
+    } catch (error) {
+      this.logger.error('Error scraping search results:', error);
+      throw error;
+    }
+  }
+
+  async parseResponse(html) {
+    // ... (existing parseResponse method)
+
+    // Add this section to extract data from UNIVERSAL_DATA_FOR_REHYDRATION
+    const universalDataScript = $('script#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
+    if (universalDataScript) {
+      try {
+        const universalData = JSON.parse(universalDataScript);
+        const userData = universalData.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo;
+        if (userData) {
+          collector.push({
+            id: userData.user.id,
+            uniqueId: userData.user.uniqueId,
+            nickname: userData.user.nickname,
+            signature: userData.user.signature,
+            avatarLarger: userData.user.avatarLarger,
+            followerCount: userData.stats.followerCount,
+            followingCount: userData.stats.followingCount,
+            heartCount: userData.stats.heartCount,
+            videoCount: userData.stats.videoCount
+          });
+        }
+      } catch (error) {
+        this.logger.error('Error parsing UNIVERSAL_DATA_FOR_REHYDRATION:', error);
+      }
+    }
+
+    // ... (rest of the parseResponse method)
   }
 }
 
