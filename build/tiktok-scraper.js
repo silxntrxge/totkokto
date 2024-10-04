@@ -70,7 +70,7 @@ class TikTokScraper {
       this.logger.log('Making request to TikTok API:', url);
       const response = await this.makeRequest(url);
       this.logger.log('Received response from TikTok API:', response.status);
-      const items = await this.parseResponse(response.data);
+      const items = await this.parseResponse(response.data, 'hashtag');
       this.logger.log(`Processed ${items.length} items from hashtag feed`);
       return items;
     } catch (error) {
@@ -112,24 +112,24 @@ class TikTokScraper {
     }
   }
 
-  async parseResponse(html) {
+  async parseResponse(html, type) {
     this.logger.log(`Starting parseResponse method. HTML length: ${html.length}`);
 
-    const $ = cheerio.load(html); // Use cheerio.load instead of just cheerio
+    const $ = cheerio.load(html);
     const collector = [];
 
     this.logger.log(`Applying cheerio to find video items`);
 
     // Look for a script tag containing the string "SIGI_STATE"
-    const scriptContent = $('script#SIGI_STATE').html();
+    const scriptContent = $('script#SIGI_STATE').html() || $('script:contains("SIGI_STATE")').html();
     
     if (scriptContent) {
       try {
-        // Parse the JSON content of the script tag
-        const data = JSON.parse(scriptContent);
+        const jsonStr = scriptContent.match(/SIGI_STATE[^{]+({.+});/)[1];
+        const data = JSON.parse(jsonStr);
 
         // Extract video items from the parsed data
-        const itemModule = data.ItemModule;
+        const itemModule = data.ItemModule || (data.ItemList && data.ItemList.items);
         
         if (itemModule) {
           for (const id in itemModule) {
@@ -173,7 +173,7 @@ class TikTokScraper {
             });
           }
         } else {
-          this.logger.log('No ItemModule found in SIGI_STATE data');
+          this.logger.log('No ItemModule or ItemList found in SIGI_STATE data');
         }
       } catch (error) {
         this.logger.error('Error parsing SIGI_STATE data:', error);
@@ -186,15 +186,15 @@ class TikTokScraper {
       this.logger.log('No items found in SIGI_STATE, falling back to HTML parsing');
       
       // Fallback to the original HTML parsing method
-      $('div[data-e2e="recommend-list-item-container"]').each((index, element) => {
+      $('div[data-e2e="challenge-item"], div[data-e2e="video-feed-item"]').each((index, element) => {
         const videoContainer = $(element);
         const videoElement = videoContainer.find('div[data-e2e="video-player"]');
         
-        const videoId = videoElement.attr('data-video-id');
-        const videoTitle = videoContainer.find('div[data-e2e="video-desc"]').text().trim();
+        const videoId = videoElement.attr('data-video-id') || videoContainer.attr('data-id');
+        const videoTitle = videoContainer.find('div[data-e2e="video-desc"], .video-feed-desc').text().trim();
         const videoUrl = videoElement.find('video').attr('src');
 
-        if (videoId && videoTitle && videoUrl) {
+        if (videoId && videoTitle) {
           collector.push({
             id: videoId,
             title: videoTitle,
@@ -205,27 +205,29 @@ class TikTokScraper {
       });
     }
 
-    // Add this section to extract data from UNIVERSAL_DATA_FOR_REHYDRATION
-    const universalDataScript = $('script#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
-    if (universalDataScript) {
-      try {
-        const universalData = JSON.parse(universalDataScript);
-        const userData = universalData.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo;
-        if (userData) {
-          collector.push({
-            id: userData.user.id,
-            uniqueId: userData.user.uniqueId,
-            nickname: userData.user.nickname,
-            signature: userData.user.signature,
-            avatarLarger: userData.user.avatarLarger,
-            followerCount: userData.stats.followerCount,
-            followingCount: userData.stats.followingCount,
-            heartCount: userData.stats.heartCount,
-            videoCount: userData.stats.videoCount
-          });
+    // Only try to parse UNIVERSAL_DATA_FOR_REHYDRATION for user profiles
+    if (type === 'user') {
+      const universalDataScript = $('script#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
+      if (universalDataScript) {
+        try {
+          const universalData = JSON.parse(universalDataScript);
+          const userData = universalData.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo;
+          if (userData) {
+            collector.push({
+              id: userData.user.id,
+              uniqueId: userData.user.uniqueId,
+              nickname: userData.user.nickname,
+              signature: userData.user.signature,
+              avatarLarger: userData.user.avatarLarger,
+              followerCount: userData.stats.followerCount,
+              followingCount: userData.stats.followingCount,
+              heartCount: userData.stats.heartCount,
+              videoCount: userData.stats.videoCount
+            });
+          }
+        } catch (error) {
+          this.logger.error('Error parsing UNIVERSAL_DATA_FOR_REHYDRATION:', error);
         }
-      } catch (error) {
-        this.logger.error('Error parsing UNIVERSAL_DATA_FOR_REHYDRATION:', error);
       }
     }
 
