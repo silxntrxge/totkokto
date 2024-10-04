@@ -54,7 +54,13 @@ class TikTokScraper {
       this.logger.log(`Making request to TikTok API: ${url}`);
       const response = await this.axios.get(url);
       this.logger.log('Received response from TikTok API:', response.status);
-      const items = await this.parseResponse(response.data);
+      let items = await this.parseResponse(response.data);
+      
+      if (items.length === 0) {
+        this.logger.log('No items found in initial parse, fetching additional data...');
+        items = await this.fetchAdditionalData(this.params.input);
+      }
+      
       this.logger.log(`Processed ${items.length} items from user feed`);
       return items;
     } catch (error) {
@@ -125,7 +131,7 @@ class TikTokScraper {
           items = Object.values(sigiState.ItemModule);
         }
       } catch (e) {
-        console.error('Error parsing SIGI_STATE:', e);
+        this.logger.error('Error parsing SIGI_STATE:', e);
       }
     }
 
@@ -153,14 +159,14 @@ class TikTokScraper {
             items = videosData;
           }
         } catch (e) {
-          console.error('Error parsing NEXT_DATA:', e);
+          this.logger.error('Error parsing NEXT_DATA:', e);
         }
       }
     }
 
     // If still no items, fallback to HTML parsing
     if (items.length === 0) {
-      console.log('Falling back to HTML parsing');
+      this.logger.log('Falling back to HTML parsing');
       $('div[data-e2e="user-post-item"]').each((index, element) => {
         const videoElement = $(element).find('div[data-e2e="user-post-item-video"]');
         if (videoElement.length) {
@@ -174,7 +180,7 @@ class TikTokScraper {
       });
     }
 
-    console.log(`Parsing complete. Collected items: ${items.length}`);
+    this.logger.log(`Parsing complete. Collected items: ${items.length}`);
     return items;
   }
 
@@ -230,6 +236,37 @@ class TikTokScraper {
       this.logger.error('Error scraping search results:', error);
       throw error;
     }
+  }
+
+  async fetchAdditionalData(username, maxItems = 30) {
+    this.logger.log(`Fetching additional data for user: ${username}`);
+    const url = `https://www.tiktok.com/api/user/detail/?uniqueId=${username}`;
+    try {
+      const response = await this.makeRequest(url);
+      const data = JSON.parse(response.data);
+      
+      if (data.userInfo) {
+        this.userInfo = {
+          ...this.userInfo,
+          followerCount: data.userInfo.stats.followerCount,
+          followingCount: data.userInfo.stats.followingCount,
+          heartCount: data.userInfo.stats.heartCount,
+          videoCount: data.userInfo.stats.videoCount,
+        };
+      }
+
+      // Fetch user's videos
+      const videosUrl = `https://www.tiktok.com/api/post/item_list/?aid=1988&secUid=${data.userInfo.user.secUid}&count=${maxItems}`;
+      const videosResponse = await this.makeRequest(videosUrl);
+      const videosData = JSON.parse(videosResponse.data);
+      
+      if (videosData.itemList) {
+        return videosData.itemList;
+      }
+    } catch (error) {
+      this.logger.error('Error fetching additional data:', error);
+    }
+    return [];
   }
 }
 
