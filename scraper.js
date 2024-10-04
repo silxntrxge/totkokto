@@ -1,5 +1,8 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const fs = require('fs');
+const path = require('path');
+const puppeteer = require('puppeteer');
 
 const headers = {
   'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
@@ -22,66 +25,38 @@ const queryParams = new URLSearchParams({
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-async fetchAdditionalData(username) {
-  const userDetailUrl = `https://www.tiktok.com/api/user/detail/?uniqueId=${username}`;
-  const itemListUrl = `https://www.tiktok.com/api/post/item_list/?${queryParams.toString()}&secUid=${secUid}&userId=${userId}`;
-
+async function fetchAdditionalData(username) {
   try {
-    // Fetch user details
-    const userResponse = await axios.get(userDetailUrl, { headers });
-    console.log('Raw user response:', userResponse.data); // Log raw response for debugging
+    // Read and parse the HAR file
+    const harFilePath = path.join(__dirname, 'www.tiktok.com.har');
+    const harData = JSON.parse(fs.readFileSync(harFilePath, 'utf8'));
 
-    // Check if response is empty or not a string
-    if (!userResponse.data || typeof userResponse.data !== 'string') {
-      console.log('Empty or invalid user response, falling back to HTML scraping');
-      return this.scrapeUserPageHTML(username);
+    // Find the relevant API calls
+    const userDetailEntry = harData.log.entries.find(entry => 
+      entry.request.url.includes('/api/user/detail/') && 
+      entry.request.url.includes(username)
+    );
+
+    const itemListEntry = harData.log.entries.find(entry => 
+      entry.request.url.includes('/api/post/item_list/')
+    );
+
+    if (!userDetailEntry || !itemListEntry) {
+      throw new Error('Required API calls not found in HAR file');
     }
 
-    let userData;
-    try {
-      userData = JSON.parse(userResponse.data);
-    } catch (parseError) {
-      console.error('Error parsing user JSON:', parseError);
-      console.log('Falling back to HTML scraping due to JSON parse error');
-      return this.scrapeUserPageHTML(username);
-    }
-
-    // Add delay between requests
-    await delay(1000); // 1 second delay
-
-    // Fetch video list
-    const videoResponse = await axios.get(itemListUrl, { headers });
-    console.log('Raw video response:', videoResponse.data); // Log raw response for debugging
-
-    // Check if response is empty or not a string
-    if (!videoResponse.data || typeof videoResponse.data !== 'string') {
-      console.log('Empty or invalid video response, falling back to HTML scraping');
-      return this.scrapeUserPageHTML(username);
-    }
-
-    let videoData;
-    try {
-      videoData = JSON.parse(videoResponse.data);
-    } catch (parseError) {
-      console.error('Error parsing video JSON:', parseError);
-      console.log('Falling back to HTML scraping due to JSON parse error');
-      return this.scrapeUserPageHTML(username);
-    }
+    // Extract and parse the JSON responses
+    const userData = JSON.parse(userDetailEntry.response.content.text);
+    const videoData = JSON.parse(itemListEntry.response.content.text);
 
     // Process and return the combined data
     return {
-      user: userData,
-      videos: videoData.items
+      user: userData.userInfo,
+      videos: videoData.itemList
     };
   } catch (error) {
-    if (error.response && error.response.status === 429) {
-      console.log('Rate limited. Waiting before retrying...');
-      await delay(60000); // Wait for 1 minute
-      return this.fetchAdditionalData(username); // Retry
-    }
-    console.error('Error fetching additional data:', error);
-    console.log('Falling back to HTML scraping');
-    return this.scrapeUserPageHTML(username);
+    console.error('Error processing HAR data:', error);
+    return null;
   }
 }
 
@@ -119,3 +94,166 @@ async scrapeUserPageHTML(username) {
     return null;
   }
 }
+
+async function parseHarFile(filePath) {
+  try {
+    const harData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return harData.log.entries;
+  } catch (error) {
+    console.error('Error parsing HAR file:', error);
+    return null;
+  }
+}
+
+async function extractUserData(entries, username) {
+  const userDetailEntry = entries.find(entry => 
+    entry.request.url.includes('/api/user/detail/') && 
+    entry.request.url.includes(username)
+  );
+
+  if (!userDetailEntry) {
+    console.error('User detail API call not found in HAR file');
+    return null;
+  }
+
+  const userData = JSON.parse(userDetailEntry.response.content.text);
+  const userInfo = userData.userInfo;
+
+  return {
+    id: userInfo.user.id,
+    uniqueId: userInfo.user.uniqueId,
+    nickname: userInfo.user.nickname,
+    avatarLarger: userInfo.user.avatarLarger,
+    signature: userInfo.user.signature,
+    verified: userInfo.user.verified,
+    followerCount: userInfo.stats.followerCount,
+    followingCount: userInfo.stats.followingCount,
+    heart: userInfo.stats.heart,
+    videoCount: userInfo.stats.videoCount
+  };
+}
+
+async function extractVideoData(entries) {
+  const itemListEntry = entries.find(entry => 
+    entry.request.url.includes('/api/post/item_list/')
+  );
+
+  if (!itemListEntry) {
+    console.error('Video list API call not found in HAR file');
+    return null;
+  }
+
+  const videoData = JSON.parse(itemListEntry.response.content.text);
+  return videoData.itemList.map(item => ({
+    id: item.id,
+    desc: item.desc,
+    createTime: item.createTime,
+    video: {
+      id: item.video.id,
+      height: item.video.height,
+      width: item.video.width,
+      duration: item.video.duration,
+      ratio: item.video.ratio,
+      cover: item.video.cover,
+      playAddr: item.video.playAddr
+    },
+    author: {
+      id: item.author.id,
+      uniqueId: item.author.uniqueId,
+      nickname: item.author.nickname
+    },
+    stats: {
+      diggCount: item.stats.diggCount,
+      shareCount: item.stats.shareCount,
+      commentCount: item.stats.commentCount,
+      playCount: item.stats.playCount
+    }
+  }));
+}
+
+async function scrapeUserData(username) {
+  // Capture network data and get HAR file path
+  const harFilePath = await captureNetworkData(username);
+
+  // Parse HAR file
+  const entries = await parseHarFile(harFilePath);
+
+  if (!entries) {
+    return null;
+  }
+
+  const userData = await extractUserData(entries, username);
+  const videoData = await extractVideoData(entries);
+
+  return {
+    user: userData,
+    videos: videoData
+  };
+}
+
+async function captureNetworkData(username) {
+  const browser = await puppeteer.launch();
+  const page = await browser.newPage();
+  
+  // Enable request interception
+  await page.setRequestInterception(true);
+  
+  const requests = [];
+  page.on('request', request => {
+    requests.push(request);
+    request.continue();
+  });
+
+  // Navigate to the TikTok user's page
+  await page.goto(`https://www.tiktok.com/@${username}`, { waitUntil: 'networkidle0' });
+
+  // Scroll to load more content if needed
+  // await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  // await page.waitForTimeout(2000); // Wait for any additional requests
+
+  // Generate HAR file
+  const har = {
+    log: {
+      version: '1.2',
+      creator: { name: 'Puppeteer', version: '1.0' },
+      entries: requests.map(request => ({
+        request: {
+          url: request.url(),
+          method: request.method(),
+          headers: request.headers(),
+        },
+        response: request.response() ? {
+          status: request.response().status(),
+          headers: request.response().headers(),
+        } : {},
+      })),
+    },
+  };
+
+  await browser.close();
+
+  // Save HAR file
+  const harFilePath = path.join(__dirname, `${username}_tiktok.har`);
+  fs.writeFileSync(harFilePath, JSON.stringify(har, null, 2));
+
+  return harFilePath;
+}
+
+// Example usage
+async function main() {
+  const username = 'charlidamelio'; // Replace with the desired username
+  const result = await scrapeUserData(username);
+
+  if (result) {
+    console.log('User Data:', JSON.stringify(result.user, null, 2));
+    console.log('Video Data:', JSON.stringify(result.videos, null, 2));
+    
+    // Optionally, save to a file
+    fs.writeFileSync('tiktok_data.json', JSON.stringify(result, null, 2));
+    console.log('Data saved to tiktok_data.json');
+  } else {
+    console.log('Failed to scrape data');
+  }
+}
+
+main().catch(console.error);
