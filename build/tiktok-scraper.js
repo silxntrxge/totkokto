@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getRandomUserAgent } from './constant.js';
-import cheerio from 'cheerio'; // Make sure this import is correct
+import * as cheerio from 'cheerio';
 
 class TikTokScraper {
   constructor(options = {}) {
@@ -115,7 +115,7 @@ class TikTokScraper {
   async parseResponse(html) {
     this.logger.log(`Starting parseResponse method. HTML length: ${html.length}`);
 
-    const $ = cheerio.load(html); // Move this inside the method
+    const $ = cheerio.load(html); // Use cheerio.load instead of just cheerio
     const collector = [];
 
     this.logger.log(`Applying cheerio to find video items`);
