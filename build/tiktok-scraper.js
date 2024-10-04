@@ -112,128 +112,70 @@ class TikTokScraper {
     }
   }
 
-  async parseResponse(html, type) {
-    this.logger.log(`Starting parseResponse method. HTML length: ${html.length}`);
-
+  async parseResponse(html) {
     const $ = cheerio.load(html);
-    const collector = [];
+    let items = [];
 
-    this.logger.log(`Applying cheerio to find video items`);
-
-    // Look for a script tag containing the string "SIGI_STATE"
-    const scriptContent = $('script#SIGI_STATE').html() || $('script:contains("SIGI_STATE")').html();
-    
-    if (scriptContent) {
+    // Try to extract SIGI_STATE
+    const sigiStateScript = $('script#SIGI_STATE').first();
+    if (sigiStateScript.length) {
       try {
-        const jsonStr = scriptContent.match(/SIGI_STATE[^{]+({.+});/)[1];
-        const data = JSON.parse(jsonStr);
-
-        // Extract video items from the parsed data
-        const itemModule = data.ItemModule || (data.ItemList && data.ItemList.items);
-        
-        if (itemModule) {
-          for (const id in itemModule) {
-            const item = itemModule[id];
-            collector.push({
-              id: item.id,
-              desc: item.desc,
-              createTime: item.createTime,
-              video: {
-                id: item.video.id,
-                height: item.video.height,
-                width: item.video.width,
-                duration: item.video.duration,
-                ratio: item.video.ratio,
-                cover: item.video.cover,
-                originCover: item.video.originCover,
-                dynamicCover: item.video.dynamicCover,
-                playAddr: item.video.playAddr,
-                downloadAddr: item.video.downloadAddr,
-              },
-              author: {
-                id: item.author.id,
-                uniqueId: item.author.uniqueId,
-                nickname: item.author.nickname,
-                avatarThumb: item.author.avatarThumb,
-              },
-              music: {
-                id: item.music.id,
-                title: item.music.title,
-                playUrl: item.music.playUrl,
-                coverThumb: item.music.coverThumb,
-                authorName: item.music.authorName,
-                original: item.music.original,
-              },
-              stats: {
-                diggCount: item.stats.diggCount,
-                shareCount: item.stats.shareCount,
-                commentCount: item.stats.commentCount,
-                playCount: item.stats.playCount,
-              },
-            });
-          }
-        } else {
-          this.logger.log('No ItemModule or ItemList found in SIGI_STATE data');
+        const sigiState = JSON.parse(sigiStateScript.html());
+        if (sigiState.ItemModule) {
+          items = Object.values(sigiState.ItemModule);
         }
-      } catch (error) {
-        this.logger.error('Error parsing SIGI_STATE data:', error);
+      } catch (e) {
+        console.error('Error parsing SIGI_STATE:', e);
       }
-    } else {
-      this.logger.log('SIGI_STATE script tag not found');
     }
 
-    if (collector.length === 0) {
-      this.logger.log('No items found in SIGI_STATE, falling back to HTML parsing');
-      
-      // Fallback to the original HTML parsing method
-      $('div[data-e2e="challenge-item"], div[data-e2e="video-feed-item"]').each((index, element) => {
-        const videoContainer = $(element);
-        const videoElement = videoContainer.find('div[data-e2e="video-player"]');
-        
-        const videoId = videoElement.attr('data-video-id') || videoContainer.attr('data-id');
-        const videoTitle = videoContainer.find('div[data-e2e="video-desc"], .video-feed-desc').text().trim();
-        const videoUrl = videoElement.find('video').attr('src');
+    // If SIGI_STATE doesn't work, try NEXT_DATA
+    if (items.length === 0) {
+      const nextDataScript = $('script#__NEXT_DATA__').first();
+      if (nextDataScript.length) {
+        try {
+          const nextData = JSON.parse(nextDataScript.html());
+          const userData = nextData.props.pageProps.userInfo;
+          const videosData = nextData.props.pageProps.items;
+          
+          if (userData) {
+            this.userInfo = {
+              id: userData.user.id,
+              uniqueId: userData.user.uniqueId,
+              nickname: userData.user.nickname,
+              avatarLarger: userData.user.avatarLarger,
+              signature: userData.user.signature,
+              verified: userData.user.verified,
+            };
+          }
+          
+          if (Array.isArray(videosData)) {
+            items = videosData;
+          }
+        } catch (e) {
+          console.error('Error parsing NEXT_DATA:', e);
+        }
+      }
+    }
 
-        if (videoId && videoTitle) {
-          collector.push({
+    // If still no items, fallback to HTML parsing
+    if (items.length === 0) {
+      console.log('Falling back to HTML parsing');
+      $('div[data-e2e="user-post-item"]').each((index, element) => {
+        const videoElement = $(element).find('div[data-e2e="user-post-item-video"]');
+        if (videoElement.length) {
+          const videoId = videoElement.attr('data-video-id');
+          const videoDesc = $(element).find('div[data-e2e="user-post-item-desc"]').text();
+          items.push({
             id: videoId,
-            title: videoTitle,
-            url: videoUrl,
+            desc: videoDesc,
           });
-          this.logger.log(`Found video item: ID=${videoId}, Title=${videoTitle}, URL=${videoUrl}`);
         }
       });
     }
 
-    // Only try to parse UNIVERSAL_DATA_FOR_REHYDRATION for user profiles
-    if (type === 'user') {
-      const universalDataScript = $('script#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
-      if (universalDataScript) {
-        try {
-          const universalData = JSON.parse(universalDataScript);
-          const userData = universalData.__DEFAULT_SCOPE__['webapp.user-detail'].userInfo;
-          if (userData) {
-            collector.push({
-              id: userData.user.id,
-              uniqueId: userData.user.uniqueId,
-              nickname: userData.user.nickname,
-              signature: userData.user.signature,
-              avatarLarger: userData.user.avatarLarger,
-              followerCount: userData.stats.followerCount,
-              followingCount: userData.stats.followingCount,
-              heartCount: userData.stats.heartCount,
-              videoCount: userData.stats.videoCount
-            });
-          }
-        } catch (error) {
-          this.logger.error('Error parsing UNIVERSAL_DATA_FOR_REHYDRATION:', error);
-        }
-      }
-    }
-
-    this.logger.log(`Parsing complete. Collected items: ${collector.length}`);
-
-    return collector;
+    console.log(`Parsing complete. Collected items: ${items.length}`);
+    return items;
   }
 
   async scrapeComments(postId, maxComments = 20) {
