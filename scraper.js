@@ -46,17 +46,31 @@ async function fetchAdditionalData(username) {
     }
 
     // Extract and parse the JSON responses
-    const userData = JSON.parse(userDetailEntry.response.content.text);
-    const videoData = JSON.parse(itemListEntry.response.content.text);
+    let userData, videoData;
+
+    try {
+      userData = JSON.parse(userDetailEntry.response.content.text);
+    } catch (error) {
+      console.error('Error parsing user detail JSON:', error);
+      userData = await this.scrapeUserPageHTML(username);
+    }
+
+    try {
+      videoData = JSON.parse(itemListEntry.response.content.text);
+    } catch (error) {
+      console.error('Error parsing video list JSON:', error);
+      videoData = { itemList: [] };
+    }
 
     // Process and return the combined data
     return {
-      user: userData.userInfo,
-      videos: videoData.itemList
+      user: userData.userInfo || userData,
+      videos: videoData.itemList || []
     };
   } catch (error) {
     console.error('Error processing HAR data:', error);
-    return null;
+    // Fallback to HTML scraping if HAR processing fails
+    return this.scrapeUserPageHTML(username);
   }
 }
 
@@ -66,23 +80,23 @@ async scrapeUserPageHTML(username) {
     const response = await axios.get(url, { headers });
     const $ = cheerio.load(response.data);
 
-    // Extract user data
+    // Extract user data from HTML
     const userData = {
-      // Extract user details from HTML
-      // This is a placeholder and needs to be implemented based on the actual HTML structure
-      username: $('some-selector').text(),
-      // ... other user details
+      uniqueId: username,
+      nickname: $('h1.tiktok-b1wpe9-H1ShareTitle').text().trim(),
+      signature: $('h2.tiktok-1n8z9r7-H2ShareDesc').text().trim(),
+      // Add more fields as needed
     };
 
-    // Extract video data
+    // Extract video data from HTML
     const videos = [];
-    $('some-video-selector').each((index, element) => {
-      // Extract video details from HTML
-      // This is a placeholder and needs to be implemented based on the actual HTML structure
-      videos.push({
+    $('div[data-e2e="user-post-item"]').each((index, element) => {
+      const video = {
         id: $(element).attr('data-video-id'),
-        // ... other video details
-      });
+        desc: $(element).find('div.tiktok-1wrhn5c-DivContainer').text().trim(),
+        // Add more fields as needed
+      };
+      videos.push(video);
     });
 
     return {
@@ -91,7 +105,10 @@ async scrapeUserPageHTML(username) {
     };
   } catch (error) {
     console.error('Error scraping HTML:', error);
-    return null;
+    return {
+      user: { uniqueId: username },
+      videos: []
+    };
   }
 }
 
