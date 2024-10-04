@@ -120,30 +120,85 @@ class TikTokScraper {
 
     this.logger.log(`Applying cheerio to find video items`);
 
-    // Select all video containers based on the CSS classes observed in the HTML
-    $('div.css-supo48-DivPlayerContainer').each((index, element) => {
-      const videoContainer = $(element);
+    // Look for a script tag containing the string "SIGI_STATE"
+    const scriptContent = $('script:contains("SIGI_STATE")').html();
+    
+    if (scriptContent) {
+      try {
+        // Extract the JSON data from the script content
+        const jsonStr = scriptContent.match(/SIGI_STATE[^{]+({.+});/)[1];
+        const data = JSON.parse(jsonStr);
 
-      // Extract the video URL
-      const videoUrl = videoContainer.find('video').attr('src');
-      const videoId = videoUrl ? videoUrl.split('/').pop().split('?')[0] : null;
-
-      // Extract the video title
-      const videoTitle = videoContainer.find('h1.css-198cw7i-H1Container').text().trim();
-
-      if (videoId && videoTitle && videoUrl) {
-        collector.push({
-          id: videoId,
-          title: videoTitle,
-          url: videoUrl,
-        });
-        this.logger.log(`Found video item: ID=${videoId}, Title=${videoTitle}, URL=${videoUrl}`);
-      } else {
-        this.logger.log(
-          `Found partial match but couldn't extract all info. ID: ${videoId}, Title: ${videoTitle}, URL: ${videoUrl}`
-        );
+        // Extract video items from the parsed data
+        const items = data.ItemModule;
+        
+        for (const id in items) {
+          const item = items[id];
+          collector.push({
+            id: item.id,
+            desc: item.desc,
+            createTime: item.createTime,
+            video: {
+              id: item.video.id,
+              height: item.video.height,
+              width: item.video.width,
+              duration: item.video.duration,
+              ratio: item.video.ratio,
+              cover: item.video.cover,
+              originCover: item.video.originCover,
+              dynamicCover: item.video.dynamicCover,
+              playAddr: item.video.playAddr,
+              downloadAddr: item.video.downloadAddr,
+            },
+            author: {
+              id: item.author.id,
+              uniqueId: item.author.uniqueId,
+              nickname: item.author.nickname,
+              avatarThumb: item.author.avatarThumb,
+            },
+            music: {
+              id: item.music.id,
+              title: item.music.title,
+              playUrl: item.music.playUrl,
+              coverThumb: item.music.coverThumb,
+              authorName: item.music.authorName,
+              original: item.music.original,
+            },
+            stats: {
+              diggCount: item.stats.diggCount,
+              shareCount: item.stats.shareCount,
+              commentCount: item.stats.commentCount,
+              playCount: item.stats.playCount,
+            },
+          });
+        }
+      } catch (error) {
+        this.logger.error('Error parsing SIGI_STATE data:', error);
       }
-    });
+    }
+
+    if (collector.length === 0) {
+      this.logger.log('No items found in SIGI_STATE, falling back to HTML parsing');
+      
+      // Fallback to the original HTML parsing method
+      $('div[data-e2e="recommend-list-item-container"]').each((index, element) => {
+        const videoContainer = $(element);
+        const videoElement = videoContainer.find('div[data-e2e="video-player"]');
+        
+        const videoId = videoElement.attr('data-video-id');
+        const videoTitle = videoContainer.find('div[data-e2e="video-desc"]').text().trim();
+        const videoUrl = videoElement.find('video').attr('src');
+
+        if (videoId && videoTitle && videoUrl) {
+          collector.push({
+            id: videoId,
+            title: videoTitle,
+            url: videoUrl,
+          });
+          this.logger.log(`Found video item: ID=${videoId}, Title=${videoTitle}, URL=${videoUrl}`);
+        }
+      });
+    }
 
     this.logger.log(`Parsing complete. Collected items: ${collector.length}`);
 
